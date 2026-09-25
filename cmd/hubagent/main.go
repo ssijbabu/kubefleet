@@ -298,6 +298,12 @@ func main() {
 
 // SetupWebhook registers the webhook config and webhook handlers with the manager.
 func SetupWebhook(mgr manager.Manager, webhookConfig *webhook.Config) error {
+	if rotator := webhookConfig.ServingCertRotator(); rotator != nil {
+		if err := mgr.Add(rotator); err != nil {
+			klog.ErrorS(err, "unable to add the webhook serving certificate rotator")
+			return err
+		}
+	}
 	if err := mgr.Add(webhookConfig); err != nil {
 		klog.ErrorS(err, "unable to add WebhookConfig")
 		return err

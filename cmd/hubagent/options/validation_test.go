@@ -119,6 +119,34 @@ func TestValidation(t *testing.T) {
 			}),
 			want: field.ErrorList{},
 		},
+		"external webhook CA with both the certificate file and the key reference": {
+			opt: newTestOptions(func(option *Options) {
+				option.WebhookAndAdmissionPolicyOpts.CACertFile = "/etc/kubefleet/webhook-ca/ca.crt"
+				option.WebhookAndAdmissionPolicyOpts.CAKeyRef = "azurekms://vault.vault.azure.net/webhook-ca"
+			}),
+			want: field.ErrorList{},
+		},
+		"external webhook CA certificate file without the key reference": {
+			opt: newTestOptions(func(option *Options) {
+				option.WebhookAndAdmissionPolicyOpts.CACertFile = "/etc/kubefleet/webhook-ca/ca.crt"
+			}),
+			want: field.ErrorList{field.Invalid(newPath.Child("CACertFile"), "/etc/kubefleet/webhook-ca/ca.crt", "The external webhook CA certificate file and key reference must be set together")},
+		},
+		"external webhook CA key reference without the certificate file": {
+			opt: newTestOptions(func(option *Options) {
+				option.WebhookAndAdmissionPolicyOpts.CAKeyRef = "azurekms://vault.vault.azure.net/webhook-ca"
+			}),
+			want: field.ErrorList{field.Invalid(newPath.Child("CACertFile"), "", "The external webhook CA certificate file and key reference must be set together")},
+		},
+		"external webhook CA with cert manager": {
+			opt: newTestOptions(func(option *Options) {
+				option.WebhookAndAdmissionPolicyOpts.UseCertManager = true
+				option.WebhookAndAdmissionPolicyOpts.EnableWorkload = true
+				option.WebhookAndAdmissionPolicyOpts.CACertFile = "/etc/kubefleet/webhook-ca/ca.crt"
+				option.WebhookAndAdmissionPolicyOpts.CAKeyRef = "azurekms://vault.vault.azure.net/webhook-ca"
+			}),
+			want: field.ErrorList{field.Invalid(newPath.Child("CACertFile"), "/etc/kubefleet/webhook-ca/ca.crt", "An external webhook CA cannot be used together with cert manager")},
+		},
 		"mutually exclusive allowed/skipped propagating APIs": {
 			opt: newTestOptions(func(option *Options) {
 				option.PlacementMgmtOpts.AllowedPropagatingAPIs = "apps/v1/Deployment"

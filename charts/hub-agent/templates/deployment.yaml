@@ -1,5 +1,12 @@
-{{- if and (not .Values.useCertManager) (gt (.Values.replicaCount | int) 1) }}
-{{- fail "ERROR: replicaCount > 1 requires useCertManager=true (self-signed certificates cannot be shared across replicas)" }}
+{{- $useExternalCA := and .Values.externalCA.certConfigMapName .Values.externalCA.keyRef }}
+{{- if and (not $useExternalCA) (or .Values.externalCA.certConfigMapName .Values.externalCA.keyRef) }}
+{{- fail "ERROR: externalCA.certConfigMapName and externalCA.keyRef must be set together" }}
+{{- end }}
+{{- if and .Values.useCertManager $useExternalCA }}
+{{- fail "ERROR: useCertManager and externalCA cannot be used together" }}
+{{- end }}
+{{- if and (not .Values.useCertManager) (not $useExternalCA) (gt (.Values.replicaCount | int) 1) }}
+{{- fail "ERROR: replicaCount > 1 requires useCertManager=true or externalCA (self-signed certificates cannot be shared across replicas)" }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -17,6 +24,9 @@ spec:
     metadata:
       labels:
         {{- include "hub-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "hub-agent.fullname" . }}-sa
       securityContext:
@@ -43,6 +53,10 @@ spec:
             - --enable-guard-rail={{ .Values.enableGuardRail }}
             - --enable-workload={{ .Values.enableWorkload }}
             - --use-cert-manager={{ .Values.useCertManager }}
+            {{- if $useExternalCA }}
+            - --webhook-ca-cert-file=/etc/kubefleet/webhook-ca/ca.crt
+            - --webhook-ca-key-ref={{ .Values.externalCA.keyRef }}
+            {{- end }}
             - --whitelisted-users=system:serviceaccount:{{ .Values.namespace }}:{{ include "hub-agent.fullname" . }}-sa
             - --webhook-client-connection-type={{.Values.webhookClientConnectionType}}
             - --v={{ .Values.logVerbosity }}
@@ -116,6 +130,11 @@ spec:
             # the read only root filesystem setup would block the agent from attempting to
             # clear the directory.
             mountPath: /tmp/k8s-webhook-server/
+          {{- if $useExternalCA }}
+          - name: webhook-ca
+            mountPath: /etc/kubefleet/webhook-ca
+            readOnly: true
+          {{- end }}
           {{- if .Values.additionalConfigData }}
           - name: additional-config
             mountPath: {{ .Values.additionalConfigDataMountPath }}
@@ -130,9 +149,18 @@ spec:
           # defaultMode 0444 (read for all) allows the container process to read the certs
           # regardless of the user/group it runs as
           defaultMode: 0444
+        {{- else if $useExternalCA }}
+        # The serving certificate key is generated in memory; keep it off the node's disk.
+        emptyDir:
+          medium: Memory
         {{- else }}
         emptyDir: {}
         {{- end }}
+      {{- if $useExternalCA }}
+      - name: webhook-ca
+        configMap:
+          name: {{ .Values.externalCA.certConfigMapName }}
+      {{- end }}
       {{- if .Values.additionalConfigData }}
       - name: additional-config
         configMap:

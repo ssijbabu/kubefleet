@@ -188,7 +188,7 @@ func TestNewWebhookConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("POD_NAMESPACE", "test-namespace")
 
-			got, err := NewWebhookConfig(tt.mgr, tt.webhookServiceName, tt.port, tt.clientConnectionType, tt.certDir, tt.enableGuardRail, tt.denyModifyMemberClusterLabels, tt.enableWorkload, tt.enablePDBs, tt.useCertManager, "fleet-webhook-server-cert", nil, false)
+			got, err := NewWebhookConfig(tt.mgr, tt.webhookServiceName, tt.port, tt.clientConnectionType, tt.certDir, tt.enableGuardRail, tt.denyModifyMemberClusterLabels, tt.enableWorkload, tt.enablePDBs, tt.useCertManager, "fleet-webhook-server-cert", nil, false, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewWebhookConfig() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -232,6 +232,7 @@ func TestNewWebhookConfig_SelfSignedCertError(t *testing.T) {
 		"fleet-webhook-server-cert", // webhookCertName
 		nil,                         // whiteListedUsers
 		false,                       // networkingAgentsEnabled
+		nil,                         // externalCA
 	)
 
 	if err == nil {

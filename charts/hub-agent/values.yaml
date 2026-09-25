@@ -26,6 +26,23 @@ useCertManager: false
 # Example:
 # webhookCertSecretName: fleet-webhook-server-cert
 
+# externalCA makes the hub agent issue its own webhook serving certificates, signed by an external CA
+# whose private key stays in a KMS or HSM (e.g. Azure Key Vault, HashiCorp Vault, AWS KMS, GCP KMS).
+# It is an alternative to useCertManager, and also allows replicaCount > 1. Set both fields, or neither.
+externalCA:
+  # certConfigMapName names a ConfigMap (key ca.crt) holding the PEM encoded CA certificate(s).
+  # It may hold more than one CA certificate, e.g. the old and the new one during a CA rotation.
+  certConfigMapName: ""
+  # keyRef is the key reference URI of the CA private key, e.g. azurekms://<vault>.vault.azure.net/<key>.
+  # The signing is done by a sigstore KMS plugin program named sigstore-kms-<scheme>, which must be on
+  # the PATH of the hub-agent image.
+  keyRef: ""
+
+# podLabels and serviceAccountAnnotations are passed through to the hub-agent pod template and
+# ServiceAccount, e.g. the workload identity metadata a KMS plugin needs to authenticate.
+podLabels: {}
+serviceAccountAnnotations: {}
+
 forceDeleteWaitTime: 15m0s
 clusterUnhealthyThreshold: 3m0s
 resourceSnapshotCreationMinimumInterval: 30s

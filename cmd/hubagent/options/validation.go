@@ -58,6 +58,14 @@ func (o *Options) Validate() field.ErrorList {
 		errs = append(errs, field.Invalid(newPath.Child("UseCertManager"), o.WebhookAndAdmissionPolicyOpts.UseCertManager, "If cert manager is used for securing webhook connections, the EnableWorkload option must be set to true, so that cert manager pods can run in the hub cluster."))
 	}
 
+	if (o.WebhookAndAdmissionPolicyOpts.CACertFile == "") != (o.WebhookAndAdmissionPolicyOpts.CAKeyRef == "") {
+		errs = append(errs, field.Invalid(newPath.Child("CACertFile"), o.WebhookAndAdmissionPolicyOpts.CACertFile, "The external webhook CA certificate file and key reference must be set together"))
+	}
+
+	if o.WebhookAndAdmissionPolicyOpts.UseCertManager && o.WebhookAndAdmissionPolicyOpts.CACertFile != "" {
+		errs = append(errs, field.Invalid(newPath.Child("CACertFile"), o.WebhookAndAdmissionPolicyOpts.CACertFile, "An external webhook CA cannot be used together with cert manager"))
+	}
+
 	if o.PlacementMgmtOpts.AllowedPropagatingAPIs != "" && o.PlacementMgmtOpts.SkippedPropagatingAPIs != "" {
 		errs = append(errs, field.Invalid(newPath.Child("AllowedPropagatingAPIs"), o.PlacementMgmtOpts.AllowedPropagatingAPIs, "AllowedPropagatingAPIs and SkippedPropagatingAPIs options are mutually exclusive"))
 	}

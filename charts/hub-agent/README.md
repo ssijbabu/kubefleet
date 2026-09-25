@@ -106,6 +106,10 @@ _See [helm install](https://helm.sh/docs/helm/helm_install/) for command documen
 | `webhookClientConnectionType` | Connection type for webhook client (service or url) | `service` |
 | `useCertManager` | Use cert-manager for webhook certificate management (requires `enableWorkload=true`) | `false` |
 | `webhookCertSecretName` | Name of the Secret where cert-manager stores the certificate (required when enabled) | `unset` |
+| `externalCA.certConfigMapName` | ConfigMap (key `ca.crt`) with the certificate(s) of an external CA that signs the webhook certificates. Set together with `externalCA.keyRef`; cannot be combined with `useCertManager`. See [External CA](#external-ca-kms-or-hsm-backed). | `""` |
+| `externalCA.keyRef` | Key reference URI of the external CA's private key, e.g. `azurekms://<vault>.vault.azure.net/<key>` | `""` |
+| `podLabels` | Extra labels for the hub-agent pod, e.g. workload identity labels a KMS plugin needs | `{}` |
+| `serviceAccountAnnotations` | Extra annotations for the hub-agent ServiceAccount, e.g. workload identity annotations a KMS plugin needs | `{}` |
 | `enableClusterInventoryAPI` | Enable cluster inventory APIs | `true` |
 | `enableStagedUpdateRunAPIs` | Enable staged update run APIs | `true` |
 | `enableEvictionAPIs` | Enable eviction APIs | `true` |
@@ -205,3 +209,48 @@ helm install hub-agent kubefleet/hub-agent \
   --set enableWorkload=true \
   --set webhookCertSecretName=my-webhook-secret
 ```
+
+### External CA (KMS or HSM backed)
+
+When `externalCA` is set, the hub agent issues its own webhook serving certificates, signed by an
+external CA whose private key never leaves its KMS or HSM (e.g. Azure Key Vault, HashiCorp Vault,
+AWS KMS, GCP KMS). This mode:
+- Requires neither cert-manager nor self-signed certificates
+- Generates each serving certificate's key in memory, and renews the certificate (30-day lifetime)
+  after two thirds of its lifetime
+- **Supports high availability with multiple replicas** (replicaCount > 1): every replica issues its
+  own certificate under the same CA, which the webhook CA bundle trusts
+- Calls the KMS only when issuing a certificate (at pod start and on renewal), never per request
+
+The signing is vendor-neutral: the hub agent resolves `externalCA.keyRef` with the
+[sigstore KMS library](https://github.com/sigstore/sigstore/tree/main/pkg/signature/kms), and a
+[`sigstore-kms-<scheme>` plugin](https://github.com/sigstore/sigstore/blob/main/pkg/signature/kms/cliplugin/README.md)
+program in the hub-agent image performs the signing (e.g. `sigstore-kms-azurekms` for `azurekms://`
+references). Build an image with the plugin on its `PATH`, and give the pod whatever identity the
+plugin needs through `podLabels` and `serviceAccountAnnotations`.
+
+```console
+# The CA certificate(s) are public; the private key stays in the KMS.
+kubectl create configmap fleet-webhook-ca --namespace fleet-system --from-file=ca.crt=./ca.crt
+
+helm install hub-agent ./charts/hub-agent/ \
+  --namespace fleet-system \
+  --create-namespace \
+  --set image.repository=<registry>/hub-agent-with-kms-plugin \
+  --set image.tag=<tag> \
+  --set replicaCount=3 \
+  --set externalCA.certConfigMapName=fleet-webhook-ca \
+  --set externalCA.keyRef=azurekms://<vault>.vault.azure.net/<key> \
+  --set-string podLabels."azure\.workload\.identity/use"=true \
+  --set serviceAccountAnnotations."azure\.workload\.identity/client-id"=<client-id>
+```
+
+The hub agent refuses to start if none of the certificates in the ConfigMap matches the public key
+of `externalCA.keyRef`, or if the matching certificate is not a CA. To rotate the CA, add the new
+CA certificate to the ConfigMap next to the old one and restart the hub agent, then move
+`externalCA.keyRef` to the new key and restart again; remove the old certificate once the serving
+certificates it signed have expired.
+
+The hub agent exposes the metrics `fleet_webhook_serving_cert_expiration_timestamp_seconds`,
+`fleet_webhook_ca_cert_expiration_timestamp_seconds` and
+`fleet_webhook_serving_cert_issuance_failures_total` for alerting on expiry and renewal failures.

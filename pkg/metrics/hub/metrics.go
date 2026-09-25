@@ -104,6 +104,31 @@ var (
 	}, []string{})
 )
 
+// The webhook serving certificate related metrics. These are only emitted when the webhook serving
+// certificate is issued by an external CA (see the --webhook-ca-cert-file and --webhook-ca-key-ref flags).
+var (
+	// FleetWebhookServingCertExpirationTimestampSeconds is a prometheus metric which holds the expiration
+	// time (NotAfter) of the webhook serving certificate currently in use by this hub agent pod.
+	FleetWebhookServingCertExpirationTimestampSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "fleet_webhook_serving_cert_expiration_timestamp_seconds",
+		Help: "Expiration time of the webhook serving certificate in use, as a Unix timestamp in seconds",
+	})
+
+	// FleetWebhookCACertExpirationTimestampSeconds is a prometheus metric which holds the expiration
+	// time (NotAfter) of the external CA certificate that signs the webhook serving certificate.
+	FleetWebhookCACertExpirationTimestampSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "fleet_webhook_ca_cert_expiration_timestamp_seconds",
+		Help: "Expiration time of the external CA certificate that signs the webhook serving certificate, as a Unix timestamp in seconds",
+	})
+
+	// FleetWebhookServingCertIssuanceFailuresTotal is a prometheus metric which counts the failed attempts
+	// to issue (or renew) the webhook serving certificate with the external CA.
+	FleetWebhookServingCertIssuanceFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "fleet_webhook_serving_cert_issuance_failures_total",
+		Help: "Number of failed attempts to issue or renew the webhook serving certificate with the external CA",
+	})
+)
+
 func init() {
 	metrics.Registry.MustRegister(
 		FleetPlacementStatusLastTimeStampSeconds,
@@ -113,5 +138,8 @@ func init() {
 		FleetUpdateRunStageClusterUpdatingDurationSeconds,
 		SchedulingCycleDurationMilliseconds,
 		SchedulerActiveWorkers,
+		FleetWebhookServingCertExpirationTimestampSeconds,
+		FleetWebhookCACertExpirationTimestampSeconds,
+		FleetWebhookServingCertIssuanceFailuresTotal,
 	)
 }

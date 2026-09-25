@@ -66,6 +66,19 @@ type WebhookAndAdmissionPolicyOptions struct {
 	// This option only applies if webhooks are enabled.
 	UseCertManager bool
 
+	// A file path to the PEM encoded certificate(s) of an external CA that signs the KubeFleet
+	// webhook server certificates. The file may hold more than one CA certificate (e.g., during a
+	// CA rotation); all of them are trusted in the webhook CA bundle, and the one matching the key
+	// referenced by CAKeyRef issues the certificates. Must be set together with CAKeyRef.
+	// This option only applies if webhooks are enabled.
+	CACertFile string
+
+	// A key reference URI (e.g., azurekms://<vault>.vault.azure.net/<key>) for the private key of
+	// the external CA set with CACertFile. The key never leaves its holder: a sigstore KMS plugin
+	// program named sigstore-kms-<scheme> on the PATH of the hub agent performs the signing.
+	// Must be set together with CACertFile. This option only applies if webhooks are enabled.
+	CAKeyRef string
+
 	// Enable the KubeFleet admission policy manager or not.
 	//
 	// KubeFleet admission policy manager manages admission policies that help enforce and validate
@@ -149,6 +162,20 @@ func (o *WebhookAndAdmissionPolicyOptions) AddFlags(flags *flag.FlagSet) {
 		"use-cert-manager",
 		false,
 		"Use the cert-manager project for managing KubeFleet webhook server certificates or not. If set to false, the system will use self-signed certificates. If set to true, the EnableWorkload option must be set to true as well. This option only applies if webhooks are enabled.",
+	)
+
+	flags.StringVar(
+		&o.CACertFile,
+		"webhook-ca-cert-file",
+		"",
+		"A file path to the PEM encoded certificate(s) of an external CA that signs the KubeFleet webhook server certificates. The file may hold more than one CA certificate (e.g., during a CA rotation); all of them are trusted in the webhook CA bundle. Must be set together with --webhook-ca-key-ref, and cannot be used with --use-cert-manager. This option only applies if webhooks are enabled.",
+	)
+
+	flags.StringVar(
+		&o.CAKeyRef,
+		"webhook-ca-key-ref",
+		"",
+		"A key reference URI (e.g., azurekms://<vault>.vault.azure.net/<key>) for the private key of the external CA set with --webhook-ca-cert-file. The key never leaves its holder: a sigstore KMS plugin program named sigstore-kms-<scheme> on the PATH of the hub agent performs the signing. Must be set together with --webhook-ca-cert-file. This option only applies if webhooks are enabled.",
 	)
 
 	flags.BoolVar(

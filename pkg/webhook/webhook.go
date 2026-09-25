@@ -48,6 +48,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -55,6 +56,7 @@ import (
 	clusterv1beta1 "github.com/kubefleet-dev/kubefleet/apis/cluster/v1beta1"
 	placementv1beta1 "github.com/kubefleet-dev/kubefleet/apis/placement/v1beta1"
 	"github.com/kubefleet-dev/kubefleet/cmd/hubagent/options"
+	hubmetrics "github.com/kubefleet-dev/kubefleet/pkg/metrics/hub"
 	"github.com/kubefleet-dev/kubefleet/pkg/utils/writefile"
 	"github.com/kubefleet-dev/kubefleet/pkg/webhook/clusterresourceoverride"
 	"github.com/kubefleet-dev/kubefleet/pkg/webhook/clusterresourceplacement"
@@ -182,6 +184,9 @@ type Config struct {
 	whiteListedUsers []string
 	// networkingAgentsEnabled indicates whether networking agents are enabled
 	networkingAgentsEnabled bool
+	// servingCertRotator renews the webhook serving certificate issued by an external CA; it is nil
+	// unless an external CA is used.
+	servingCertRotator *servingCertRotator
 }
 
 func NewWebhookConfig(
@@ -198,6 +203,7 @@ func NewWebhookConfig(
 	webhookCertName string,
 	whiteListedUsers []string,
 	networkingAgentsEnabled bool,
+	externalCA *ExternalCA,
 ) (*Config, error) {
 	// We assume the Pod namespace should be passed to env through downward API in the Pod spec.
 	namespace := os.Getenv("POD_NAMESPACE")
@@ -221,12 +227,33 @@ func NewWebhookConfig(
 		networkingAgentsEnabled:       networkingAgentsEnabled,
 	}
 
-	if useCertManager {
+	switch {
+	case useCertManager && externalCA != nil:
+		return nil, errors.New("cert-manager and an external webhook CA cannot be used at the same time")
+	case useCertManager:
 		// When using cert-manager, the CA bundle is automatically injected by cert-manager's CA injector
 		// based on the cert-manager.io/inject-ca-from annotation. We don't need to load or set the CA here.
 		// The certificates (tls.crt and tls.key) are mounted by Kubernetes and used automatically by the webhook server.
 		klog.V(2).InfoS("Using cert-manager for certificate management", "certDir", certDir)
-	} else {
+	case externalCA != nil:
+		// Issue the serving certificate with the external CA now, so that the webhook server can start
+		// serving right away; the rotator renews it afterwards. Every replica issues its own certificate
+		// under the same CA, so the CA bundle is valid for all of them.
+		rotator := &servingCertRotator{
+			ca:         externalCA,
+			certDir:    certDir,
+			commonName: w.servingCertCommonName(),
+			dnsNames:   w.servingCertDNSNames(),
+			clock:      clock.RealClock{},
+		}
+		if err := rotator.rotate(); err != nil {
+			hubmetrics.FleetWebhookServingCertIssuanceFailuresTotal.Inc()
+			return nil, fmt.Errorf("failed to issue the webhook serving certificate with the external CA: %w", err)
+		}
+		w.caPEM = externalCA.caPEM
+		w.servingCertRotator = rotator
+		klog.V(2).InfoS("Using an external CA for certificate management", "certDir", certDir)
+	default:
 		// Use self-signed certificate generation (original flow)
 		caPEM, err := w.genCertificate(certDir)
 		if err != nil {
@@ -238,6 +265,15 @@ func NewWebhookConfig(
 	return &w, nil
 }
 
+// ServingCertRotator returns the runnable that renews the webhook serving certificate, or nil if
+// the certificate does not need renewing by the hub agent (i.e., no external CA is used).
+func (w *Config) ServingCertRotator() manager.Runnable {
+	if w.servingCertRotator == nil {
+		return nil
+	}
+	return w.servingCertRotator
+}
+
 // NewWebhookConfigFromOptions creates a webhook config from command-line options.
 // This helper handles type conversions from option strings to proper types.
 // Note: This function assumes opts has been pre-validated using opts.Validate().
@@ -246,6 +282,17 @@ func NewWebhookConfig(
 func NewWebhookConfigFromOptions(mgr manager.Manager, opts *options.Options, webhookPort int32) (*Config, error) {
 	webhookClientConnectionType := options.WebhookClientConnectionType(opts.WebhookAndAdmissionPolicyOpts.ClientConnectionType)
 	whiteListedUsers := strings.Split(opts.WebhookAndAdmissionPolicyOpts.GuardRailWhitelistedUsers, ",")
+
+	var externalCA *ExternalCA
+	if caCertFile := opts.WebhookAndAdmissionPolicyOpts.CACertFile; caCertFile != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), externalCALoadTimeout)
+		defer cancel()
+		ca, err := LoadExternalCA(ctx, caCertFile, opts.WebhookAndAdmissionPolicyOpts.CAKeyRef)
+		if err != nil {
+			return nil, err
+		}
+		externalCA = ca
+	}
 
 	return NewWebhookConfig(
 		mgr,
@@ -260,7 +307,8 @@ func NewWebhookConfigFromOptions(mgr manager.Manager, opts *options.Options, web
 		opts.WebhookAndAdmissionPolicyOpts.UseCertManager,
 		FleetWebhookCertName,
 		whiteListedUsers,
-		opts.ClusterMgmtOpts.NetworkingAgentsEnabled)
+		opts.ClusterMgmtOpts.NetworkingAgentsEnabled,
+		externalCA)
 }
 
 func (w *Config) Start(ctx context.Context) error {
@@ -881,16 +929,12 @@ func (w *Config) genSelfSignedCert() (caPEMByte, certPEMByte, keyPEMByte []byte,
 	}
 	caPEMByte = caPEM.Bytes()
 
-	dnsNames := []string{
-		fmt.Sprintf("%s.%s.svc", w.serviceName, w.serviceNamespace),
-		fmt.Sprintf("%s.%s.svc.cluster.local", w.serviceName, w.serviceNamespace),
-	}
 	// server cert config
 	cert := &x509.Certificate{
-		DNSNames:     dnsNames,
+		DNSNames:     w.servingCertDNSNames(),
 		SerialNumber: big.NewInt(2022),
 		Subject: pkix.Name{
-			CommonName:         fmt.Sprintf("%s.cert.server", w.serviceName),
+			CommonName:         w.servingCertCommonName(),
 			OrganizationalUnit: []string{"Azure Kubernetes Service"},
 			Organization:       []string{"Microsoft"},
 			Locality:           []string{"Redmond"},
@@ -935,6 +979,19 @@ func (w *Config) genSelfSignedCert() (caPEMByte, certPEMByte, keyPEMByte []byte,
 	}
 	keyPEMByte = certPrvKeyPEM.Bytes()
 	return caPEMByte, certPEMByte, keyPEMByte, nil
+}
+
+// servingCertDNSNames returns the DNS names the webhook serving certificate must be valid for.
+func (w *Config) servingCertDNSNames() []string {
+	return []string{
+		fmt.Sprintf("%s.%s.svc", w.serviceName, w.serviceNamespace),
+		fmt.Sprintf("%s.%s.svc.cluster.local", w.serviceName, w.serviceNamespace),
+	}
+}
+
+// servingCertCommonName returns the common name of the webhook serving certificate.
+func (w *Config) servingCertCommonName() string {
+	return fmt.Sprintf("%s.cert.server", w.serviceName)
 }
 
 // genCertAndKeyFile creates the serving certificate/key files for the webhook server
