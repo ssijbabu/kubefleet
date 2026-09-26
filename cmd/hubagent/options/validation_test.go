@@ -123,8 +123,17 @@ func TestValidation(t *testing.T) {
 			opt: newTestOptions(func(option *Options) {
 				option.WebhookAndAdmissionPolicyOpts.CACertFile = "/etc/kubefleet/webhook-ca/ca.crt"
 				option.WebhookAndAdmissionPolicyOpts.CAKeyRef = "azurekms://vault.vault.azure.net/webhook-ca"
+				option.WebhookAndAdmissionPolicyOpts.ServingCertValidity = 24 * time.Hour
 			}),
 			want: field.ErrorList{},
+		},
+		"external webhook CA with a serving certificate validity below the minimum": {
+			opt: newTestOptions(func(option *Options) {
+				option.WebhookAndAdmissionPolicyOpts.CACertFile = "/etc/kubefleet/webhook-ca/ca.crt"
+				option.WebhookAndAdmissionPolicyOpts.CAKeyRef = "azurekms://vault.vault.azure.net/webhook-ca"
+				option.WebhookAndAdmissionPolicyOpts.ServingCertValidity = time.Minute
+			}),
+			want: field.ErrorList{field.Invalid(newPath.Child("ServingCertValidity"), time.Minute, "The webhook serving certificate validity must be at least 10m0s")},
 		},
 		"external webhook CA certificate file without the key reference": {
 			opt: newTestOptions(func(option *Options) {
@@ -144,6 +153,7 @@ func TestValidation(t *testing.T) {
 				option.WebhookAndAdmissionPolicyOpts.EnableWorkload = true
 				option.WebhookAndAdmissionPolicyOpts.CACertFile = "/etc/kubefleet/webhook-ca/ca.crt"
 				option.WebhookAndAdmissionPolicyOpts.CAKeyRef = "azurekms://vault.vault.azure.net/webhook-ca"
+				option.WebhookAndAdmissionPolicyOpts.ServingCertValidity = DefaultServingCertValidity
 			}),
 			want: field.ErrorList{field.Invalid(newPath.Child("CACertFile"), "/etc/kubefleet/webhook-ca/ca.crt", "An external webhook CA cannot be used together with cert manager")},
 		},

@@ -37,16 +37,11 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 
+	"github.com/kubefleet-dev/kubefleet/cmd/hubagent/options"
 	hubmetrics "github.com/kubefleet-dev/kubefleet/pkg/metrics/hub"
 )
 
 const (
-	// externalCALoadTimeout bounds how long loading the external CA signing key may take at startup.
-	externalCALoadTimeout = time.Minute
-
-	// externalCAServingCertValidity is the lifetime of a webhook serving certificate issued by
-	// the external CA. The certificate is renewed after two thirds of its lifetime has passed.
-	externalCAServingCertValidity = 30 * 24 * time.Hour
 	// externalCAServingCertBackdate is how far in the past the NotBefore field of a serving
 	// certificate is set, to tolerate clock skew between the hub agent and the API server.
 	externalCAServingCertBackdate = 5 * time.Minute
@@ -68,6 +63,9 @@ type ExternalCA struct {
 	issuer *x509.Certificate
 	// signer signs with the private key of the CA.
 	signer crypto.Signer
+	// servingCertValidity is the lifetime of the serving certificates the CA issues. They are
+	// renewed after two thirds of their lifetime.
+	servingCertValidity time.Duration
 }
 
 // LoadExternalCA loads the CA certificate(s) from caCertFile and resolves keyRef, a key reference
@@ -75,30 +73,36 @@ type ExternalCA struct {
 //
 // KubeFleet registers no vendor-specific KMS provider; a key reference is served by a plugin program
 // named sigstore-kms-<scheme> on the PATH of the hub agent, which keeps the hub agent vendor-neutral.
-func LoadExternalCA(ctx context.Context, caCertFile, keyRef string) (*ExternalCA, error) {
+//
+// servingCertValidity is the lifetime of the serving certificates the CA issues; zero means the
+// default of 30 days.
+func LoadExternalCA(ctx context.Context, caCertFile, keyRef string, servingCertValidity time.Duration) (*ExternalCA, error) {
 	caPEM, err := os.ReadFile(filepath.Clean(caCertFile))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the webhook CA certificate file %q: %w", caCertFile, err)
 	}
 
-	sv, err := kms.Get(ctx, keyRef, crypto.SHA256)
+	// The key is used for as long as the hub agent runs, so it is loaded without a deadline: a
+	// sigstore KMS plugin receives the load context's deadline with every later call, and may
+	// apply it to them.
+	sv, err := kms.Get(context.WithoutCancel(ctx), keyRef, crypto.SHA256)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load the webhook CA signing key %q: %w", keyRef, err)
 	}
-	// The signer is used for as long as the hub agent runs, so it must not inherit the (bounded)
-	// context used for loading.
-	signer, _, err := sv.CryptoSigner(context.Background(), func(err error) {
+	signer, _, err := sv.CryptoSigner(context.WithoutCancel(ctx), func(err error) {
 		klog.ErrorS(err, "The webhook CA signing key operation failed", "keyRef", keyRef)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get a signer for the webhook CA signing key %q: %w", keyRef, err)
 	}
-	return NewExternalCA(caPEM, signer)
+	return NewExternalCA(caPEM, signer, servingCertValidity)
 }
 
 // NewExternalCA returns an ExternalCA that signs with signer. caPEM must contain the CA
 // certificate matching the signer's public key; it may contain other CA certificates as well.
-func NewExternalCA(caPEM []byte, signer crypto.Signer) (*ExternalCA, error) {
+// servingCertValidity is the lifetime of the serving certificates the CA issues; zero means the
+// default of 30 days.
+func NewExternalCA(caPEM []byte, signer crypto.Signer, servingCertValidity time.Duration) (*ExternalCA, error) {
 	caCerts, err := parseCertificates(caPEM)
 	if err != nil {
 		return nil, err
@@ -125,10 +129,18 @@ func NewExternalCA(caPEM []byte, signer crypto.Signer) (*ExternalCA, error) {
 		return nil, fmt.Errorf("the webhook CA certificate %q is not allowed to sign certificates", issuer.Subject.String())
 	}
 
+	if servingCertValidity == 0 {
+		servingCertValidity = options.DefaultServingCertValidity
+	}
+	if servingCertValidity < options.MinServingCertValidity {
+		return nil, fmt.Errorf("the webhook serving certificate validity %s is shorter than the minimum of %s", servingCertValidity, options.MinServingCertValidity)
+	}
+
 	return &ExternalCA{
-		caPEM:  caPEM,
-		issuer: issuer,
-		signer: &cachedPublicKeySigner{Signer: signer, public: issuer.PublicKey},
+		caPEM:               caPEM,
+		issuer:              issuer,
+		signer:              &cachedPublicKeySigner{Signer: signer, public: issuer.PublicKey},
+		servingCertValidity: servingCertValidity,
 	}, nil
 }
 
@@ -149,7 +161,7 @@ func (ca *ExternalCA) issueServingCert(commonName string, dnsNames []string, now
 	}
 
 	notBefore = now.Add(-externalCAServingCertBackdate)
-	notAfter = now.Add(externalCAServingCertValidity)
+	notAfter = now.Add(ca.servingCertValidity)
 	// A serving certificate must not outlive the CA that issues it.
 	if notAfter.After(ca.issuer.NotAfter) {
 		notAfter = ca.issuer.NotAfter

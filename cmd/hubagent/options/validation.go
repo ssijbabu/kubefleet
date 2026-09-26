@@ -17,6 +17,7 @@ limitations under the License.
 package options
 
 import (
+	"fmt"
 	"os"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -64,6 +65,11 @@ func (o *Options) Validate() field.ErrorList {
 
 	if o.WebhookAndAdmissionPolicyOpts.UseCertManager && o.WebhookAndAdmissionPolicyOpts.CACertFile != "" {
 		errs = append(errs, field.Invalid(newPath.Child("CACertFile"), o.WebhookAndAdmissionPolicyOpts.CACertFile, "An external webhook CA cannot be used together with cert manager"))
+	}
+
+	if o.WebhookAndAdmissionPolicyOpts.CACertFile != "" && o.WebhookAndAdmissionPolicyOpts.CAKeyRef != "" &&
+		o.WebhookAndAdmissionPolicyOpts.ServingCertValidity < MinServingCertValidity {
+		errs = append(errs, field.Invalid(newPath.Child("ServingCertValidity"), o.WebhookAndAdmissionPolicyOpts.ServingCertValidity, fmt.Sprintf("The webhook serving certificate validity must be at least %s", MinServingCertValidity)))
 	}
 
 	if o.PlacementMgmtOpts.AllowedPropagatingAPIs != "" && o.PlacementMgmtOpts.SkippedPropagatingAPIs != "" {

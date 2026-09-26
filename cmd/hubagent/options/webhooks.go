@@ -19,6 +19,16 @@ package options
 import (
 	"flag"
 	"fmt"
+	"time"
+)
+
+const (
+	// DefaultServingCertValidity is the default lifetime of a webhook serving certificate issued
+	// by an external CA.
+	DefaultServingCertValidity = 30 * 24 * time.Hour
+	// MinServingCertValidity is the shortest allowed lifetime of a webhook serving certificate
+	// issued by an external CA.
+	MinServingCertValidity = 10 * time.Minute
 )
 
 // WebhookAndAdmissionPolicyOptions is a set of options the KubeFleet hub agent exposes for
@@ -78,6 +88,12 @@ type WebhookAndAdmissionPolicyOptions struct {
 	// program named sigstore-kms-<scheme> on the PATH of the hub agent performs the signing.
 	// Must be set together with CACertFile. This option only applies if webhooks are enabled.
 	CAKeyRef string
+
+	// The lifetime of a webhook server certificate issued by the external CA set with CACertFile.
+	// The hub agent renews the certificate after two thirds of its lifetime; the remaining third
+	// is the time available to fix a failed renewal (e.g., the KMS being unavailable) before the
+	// certificate expires. This option only applies if an external CA is used.
+	ServingCertValidity time.Duration
 
 	// Enable the KubeFleet admission policy manager or not.
 	//
@@ -176,6 +192,13 @@ func (o *WebhookAndAdmissionPolicyOptions) AddFlags(flags *flag.FlagSet) {
 		"webhook-ca-key-ref",
 		"",
 		"A key reference URI (e.g., azurekms://<vault>.vault.azure.net/<key>) for the private key of the external CA set with --webhook-ca-cert-file. The key never leaves its holder: a sigstore KMS plugin program named sigstore-kms-<scheme> on the PATH of the hub agent performs the signing. Must be set together with --webhook-ca-cert-file. This option only applies if webhooks are enabled.",
+	)
+
+	flags.DurationVar(
+		&o.ServingCertValidity,
+		"webhook-serving-cert-validity",
+		DefaultServingCertValidity,
+		"The lifetime of a webhook server certificate issued by the external CA set with --webhook-ca-cert-file, e.g. 720h (the default, 30 days) or 24h. The hub agent renews the certificate after two thirds of its lifetime; the remaining third is the time available to fix a failed renewal (e.g., the KMS being unavailable) before the certificate expires. Must be at least 10m. This option only applies if an external CA is used.",
 	)
 
 	flags.BoolVar(

@@ -285,9 +285,8 @@ func NewWebhookConfigFromOptions(mgr manager.Manager, opts *options.Options, web
 
 	var externalCA *ExternalCA
 	if caCertFile := opts.WebhookAndAdmissionPolicyOpts.CACertFile; caCertFile != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), externalCALoadTimeout)
-		defer cancel()
-		ca, err := LoadExternalCA(ctx, caCertFile, opts.WebhookAndAdmissionPolicyOpts.CAKeyRef)
+		ca, err := LoadExternalCA(context.Background(), caCertFile, opts.WebhookAndAdmissionPolicyOpts.CAKeyRef,
+			opts.WebhookAndAdmissionPolicyOpts.ServingCertValidity)
 		if err != nil {
 			return nil, err
 		}

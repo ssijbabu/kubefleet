@@ -37,6 +37,11 @@ externalCA:
   # The signing is done by a sigstore KMS plugin program named sigstore-kms-<scheme>, which must be on
   # the PATH of the hub-agent image.
   keyRef: ""
+  # servingCertValidity is the lifetime of each webhook serving certificate (minimum 10m). The hub
+  # agent renews it after two thirds of its lifetime; the remaining third is the time available to
+  # fix a failed renewal (e.g. the KMS being unavailable) before the certificate expires.
+  # E.g. 720h (30 days) leaves 10 days, 168h (7 days) about 2.3 days, 24h about 8 hours.
+  servingCertValidity: 720h
 
 # podLabels and serviceAccountAnnotations are passed through to the hub-agent pod template and
 # ServiceAccount, e.g. the workload identity metadata a KMS plugin needs to authenticate.

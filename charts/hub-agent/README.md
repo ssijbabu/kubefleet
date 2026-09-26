@@ -108,6 +108,7 @@ _See [helm install](https://helm.sh/docs/helm/helm_install/) for command documen
 | `webhookCertSecretName` | Name of the Secret where cert-manager stores the certificate (required when enabled) | `unset` |
 | `externalCA.certConfigMapName` | ConfigMap (key `ca.crt`) with the certificate(s) of an external CA that signs the webhook certificates. Set together with `externalCA.keyRef`; cannot be combined with `useCertManager`. See [External CA](#external-ca-kms-or-hsm-backed). | `""` |
 | `externalCA.keyRef` | Key reference URI of the external CA's private key, e.g. `azurekms://<vault>.vault.azure.net/<key>` | `""` |
+| `externalCA.servingCertValidity` | Lifetime of each webhook serving certificate (minimum `10m`). Renewed after two thirds of it; the last third is the time to fix a failed renewal. | `720h` |
 | `podLabels` | Extra labels for the hub-agent pod, e.g. workload identity labels a KMS plugin needs | `{}` |
 | `serviceAccountAnnotations` | Extra annotations for the hub-agent ServiceAccount, e.g. workload identity annotations a KMS plugin needs | `{}` |
 | `enableClusterInventoryAPI` | Enable cluster inventory APIs | `true` |
@@ -216,8 +217,8 @@ When `externalCA` is set, the hub agent issues its own webhook serving certifica
 external CA whose private key never leaves its KMS or HSM (e.g. Azure Key Vault, HashiCorp Vault,
 AWS KMS, GCP KMS). This mode:
 - Requires neither cert-manager nor self-signed certificates
-- Generates each serving certificate's key in memory, and renews the certificate (30-day lifetime)
-  after two thirds of its lifetime
+- Generates each serving certificate's key in memory, and renews the certificate after two thirds
+  of its lifetime (`externalCA.servingCertValidity`, 30 days by default)
 - **Supports high availability with multiple replicas** (replicaCount > 1): every replica issues its
   own certificate under the same CA, which the webhook CA bundle trusts
 - Calls the KMS only when issuing a certificate (at pod start and on renewal), never per request

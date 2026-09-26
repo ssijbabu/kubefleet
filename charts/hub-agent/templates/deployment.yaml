@@ -56,6 +56,7 @@ spec:
             {{- if $useExternalCA }}
             - --webhook-ca-cert-file=/etc/kubefleet/webhook-ca/ca.crt
             - --webhook-ca-key-ref={{ .Values.externalCA.keyRef }}
+            - --webhook-serving-cert-validity={{ .Values.externalCA.servingCertValidity | default "720h" }}
             {{- end }}
             - --whitelisted-users=system:serviceaccount:{{ .Values.namespace }}:{{ include "hub-agent.fullname" . }}-sa
             - --webhook-client-connection-type={{.Values.webhookClientConnectionType}}
